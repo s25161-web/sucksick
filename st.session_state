@@ -1,0 +1,52 @@
+import pandas as pd
+import streamlit as st
+
+# 1. 세션 상태(st.session_state) 초기화 (앱이 실행될 때 최초 1회만 생성)
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+
+if "user_info" not in st.session_state:
+    st.session_state["user_info"] = {"student_id": "", "name": ""}
+
+if "applications" not in st.session_state:
+    # 신청 내역을 저장할 데이터프레임 구조 생성
+    st.session_state["applications"] = pd.DataFrame(
+        columns=["student_id", "name", "date", "status"]
+    )
+
+# 2. 로그인 처리예시 (값을 입력받아 session_state에 저장)
+st.subheader("로그인")
+student_id = st.text_input("학번")
+name = st.text_input("이름")
+
+if st.button("로그인"):
+    if student_id and name:
+        # 데이터가 새로고침되어도 유지되도록 session_state에 저장
+        st.session_state["logged_in"] = True
+        st.session_state["user_info"] = {
+            "student_id": student_id,
+            "name": name,
+        }
+        st.success("로그인 성공!")
+        st.rerun()
+
+# 3. 로그인 상태 유지 확인 및 신청 데이터 저장
+if st.session_state["logged_in"]:
+    user = st.session_state["user_info"]
+    st.write(f"현재 사용자: {user['name']} ({user['student_id']})")
+
+    # 신청 데이터 추가 시에도 session_state의 데이터프레임 업데이트
+    if st.button("오늘 석식 신청"):
+        new_app = pd.DataFrame(
+            [[user["student_id"], user["name"], "2026-09-22", "신청완료"]],
+            columns=["student_id", "name", "date", "status"],
+        )
+
+        # 기존 데이터프레임에 새로고침 없이 계속 누적 저장
+        st.session_state["applications"] = pd.concat(
+            [st.session_state["applications"], new_app], ignore_index=True
+        )
+        st.success("신청되었습니다!")
+
+    # 누적된 신청 내역 출력 (화면을 전환해도 사라지지 않음)
+    st.dataframe(st.session_state["applications"])
