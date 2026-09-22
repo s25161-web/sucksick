@@ -1,52 +1,85 @@
 import pandas as pd
 import streamlit as st
 
-# 1. 세션 상태(st.session_state) 초기화 (앱이 실행될 때 최초 1회만 생성)
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
-
-if "user_info" not in st.session_state:
-    st.session_state["user_info"] = {"student_id": "", "name": ""}
-
-if "applications" not in st.session_state:
-    # 신청 내역을 저장할 데이터프레임 구조 생성
-    st.session_state["applications"] = pd.DataFrame(
+# 1. 로그인 상태와 별개로 '전체 석식 신청 DB'를 상위 메모리에 세팅
+if "global_db" not in st.session_state:
+    # 앱이 켜져 있는 동안 모든 사용자의 신청 내역이 누적 저장되는 공간
+    st.session_state["global_db"] = pd.DataFrame(
         columns=["student_id", "name", "date", "status"]
     )
 
-# 2. 로그인 처리예시 (값을 입력받아 session_state에 저장)
-st.subheader("로그인")
-student_id = st.text_input("학번")
-name = st.text_input("이름")
+if "user_info" not in st.session_state:
+    st.session_state["user_info"] = None  # 현재 로그인한 사용자 정보
 
-if st.button("로그인"):
-    if student_id and name:
-        # 데이터가 새로고침되어도 유지되도록 session_state에 저장
-        st.session_state["logged_in"] = True
-        st.session_state["user_info"] = {
-            "student_id": student_id,
-            "name": name,
-        }
-        st.success("로그인 성공!")
+# --------------------------------------------------
+# 2. 로그인 / 로그아웃 기능
+# --------------------------------------------------
+st.title("🍱 석식 사전 신청 앱")
+
+if st.session_state["user_info"] is None:
+    st.subheader("로그인")
+    student_id = st.text_input("학번 (예: 20301)")
+    name = st.text_input("이름 (예: 홍길동)")
+
+    if st.button("로그인"):
+        if student_id and name:
+            st.session_state["user_info"] = {
+                "student_id": student_id,
+                "name": name,
+            }
+            st.rerun()
+else:
+    user = st.session_state["user_info"]
+    st.success(f"현재 로그인: {user['name']} ({user['student_id']})")
+
+    # [로그아웃 버튼] - 로그아웃을 해도 global_db의 데이터는 삭제되지 않음!
+    if st.button("로그아웃"):
+        st.session_state["user_info"] = None
         st.rerun()
 
-# 3. 로그인 상태 유지 확인 및 신청 데이터 저장
-if st.session_state["logged_in"]:
-    user = st.session_state["user_info"]
-    st.write(f"현재 사용자: {user['name']} ({user['student_id']})")
+    st.divider()
 
-    # 신청 데이터 추가 시에도 session_state의 데이터프레임 업데이트
-    if st.button("오늘 석식 신청"):
-        new_app = pd.DataFrame(
-            [[user["student_id"], user["name"], "2026-09-22", "신청완료"]],
-            columns=["student_id", "name", "date", "status"],
-        )
+    # --------------------------------------------------
+    # 3. 석식 신청 및 유지 확인
+    # --------------------------------------------------
+    st.subheader("📅 석식 신청하기")
+    select_date = "2026-09-22"
 
-        # 기존 데이터프레임에 새로고침 없이 계속 누적 저장
-        st.session_state["applications"] = pd.concat(
-            [st.session_state["applications"], new_app], ignore_index=True
-        )
-        st.success("신청되었습니다!")
+    db = st.session_state["global_db"]
 
-    # 누적된 신청 내역 출력 (화면을 전환해도 사라지지 않음)
-    st.dataframe(st.session_state["applications"])
+    # 현재 로그인한 학생이 이미 신청했는지 DB에서 확인
+    already_applied = not db[
+        (db["student_id"] == user["student_id"])
+        & (db["date"] == select_date)
+        & (db["status"] == "신청완료")
+    ].empty
+
+    if already_applied:
+        st.info("✅ 이미 석식을 신청한 계정입니다.")
+        if st.button("신청 취소"):
+            # DB에서 해당 학생의 신청 기록 삭제
+            st.session_state["global_db"] = db[
+                ~(
+                    (db["student_id"] == user["student_id"])
+                    & (db["date"] == select_date)
+                )
+            ]
+            st.rerun()
+    else:
+        if st.button("석식 신청하기"):
+            new_record = pd.DataFrame(
+                [[user["student_id"], user["name"], select_date, "신청완료"]],
+                columns=["student_id", "name", "date", "status"],
+            )
+            # 전체 DB에 데이터 누적 저장
+            st.session_state["global_db"] = pd.concat(
+                [st.session_state["global_db"], new_record], ignore_index=True
+            )
+            st.rerun()
+
+# --------------------------------------------------
+# 4. 전체 신청 DB 현황 (로그아웃되어도 데이터 보존됨)
+# --------------------------------------------------
+st.divider()
+st.subheader("📋 전체 석식 신청 DB (로그아웃 여부와 상관없이 유지됨)")
+st.dataframe(st.session_state["global_db"], use_container_width=True)
