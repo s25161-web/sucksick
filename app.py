@@ -1,31 +1,36 @@
 import datetime
-import random
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 
 # ==========================================
-# 1. 페이지 기본 설정 및 세션 상태 초기화
+# 1. 페이지 기본 설정 및 구글 시트 연동
 # ==========================================
 st.set_page_config(
     page_title="우리학교 석식 사전 신청 앱", page_icon="🍱", layout="wide"
 )
 
-# 세션 상태(Session State) 초기화 (데이터 보존용)
+# 구글 시트 커넥터 연결 (secrets.toml 설정 필요)
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+
+# 구글 시트에서 데이터 불러오기 함수
+def load_data():
+    try:
+        # TTL=0으로 설정하여 항상 최신 구글 시트 데이터를 가져옴
+        data = conn.read(ttl=0)
+        return data
+    except Exception:
+        # 시트가 비어있거나 초기 상태일 경우 기본 구조 생성
+        return pd.DataFrame(columns=["student_id", "name", "date", "status"])
+
+
+# 세션 상태(Session State) 초기화 (로그인 상태 관리)
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 if "user_info" not in st.session_state:
     st.session_state["user_info"] = {"student_id": "", "name": ""}
-if "applications" not in st.session_state:
-    # 예시 초기 신청 데이터 [학번, 이름, 날짜, 상태]
-    st.session_state["applications"] = pd.DataFrame(
-        [
-            ["20301", "김철수", "2026-09-22", "신청완료"],
-            ["20302", "이영희", "2026-09-22", "신청완료"],
-            ["20301", "김철수", "2026-09-23", "신청완료"],
-        ],
-        columns=["student_id", "name", "date", "status"],
-    )
 
 # 예시 석식 메뉴 데이터
 MENU_DATA = {
@@ -63,13 +68,11 @@ MENU_DATA = {
 # 2. 메인 헤더
 # ==========================================
 st.title("🍱 우리학교 석식 사전 신청 시스템")
-st.caption(
-    "데이터 기반의 정확한 인원 예측으로 잔반을 줄이고 더 맛있는 석식을 만듭니다."
-)
+st.caption("구글 시트 데이터베이스 연동으로 신청 내역이 안전하게 보존됩니다.")
 st.divider()
 
 # ==========================================
-# 3. 탭 구성 (로그인 / 신청 및 메뉴 / AI 예측)
+# 3. 탭 구성
 # ==========================================
 tab1, tab2, tab3 = st.tabs(
     [
@@ -86,7 +89,7 @@ with tab1:
     st.subheader("👤 학생/교직원 본인 인증")
 
     if not st.session_state["logged_in"]:
-        col1, col2 = st.columns(2)
+        col1, _ = st.columns([1, 1])
         with col1:
             student_id = st.text_input(
                 "학번/사번 입력", placeholder="예: 20301"
@@ -98,8 +101,8 @@ with tab1:
                 if student_id and name:
                     st.session_state["logged_in"] = True
                     st.session_state["user_info"] = {
-                        "student_id": student_id,
-                        "name": name,
+                        "student_id": str(student_id).strip(),
+                        "name": name.strip(),
                     }
                     st.success(
                         f"인증 성공! 환영합니다, {name}님({student_id})."
@@ -109,7 +112,9 @@ with tab1:
                     st.error("학번과 이름을 모두 입력해주세요.")
     else:
         user = st.session_state["user_info"]
-        st.info(f"현재 **{user['name']} ({user['student_id']})** 계정으로 로그인되어 있습니다.")
+        st.info(
+            f"현재 **{user['name']} ({user['student_id']})** 계정으로 로그인되어 있습니다."
+        )
         if st.button("로그아웃"):
             st.session_state["logged_in"] = False
             st.session_state["user_info"] = {"student_id": "", "name": ""}
@@ -122,8 +127,15 @@ with tab2:
     st.subheader("📅 날짜별 석식 메뉴 및 신청")
 
     if not st.session_state["logged_in"]:
-        st.warning("⚠️ 석식을 신청하려면 먼저 [1. 로그인 및 본인인증] 탭에서 로그인을 해주세요.")
+        st.warning(
+            "⚠️ 석식을 신청하려면 먼저 [1. 로그인 및 본인인증] 탭에서 로그인을 해주세요."
+        )
     else:
+        # 최신 구글 시트 데이터 불러오기
+        df_app = load_data()
+        if not df_app.empty:
+            df_app["student_id"] = df_app["student_id"].astype(str).str.strip()
+
         # 날짜 선택
         selected_date = st.date_input(
             "석식을 신청할 날짜를 선택하세요",
@@ -150,54 +162,57 @@ with tab2:
 
         # 우측: 신청하기 / 취소하기
         with col_app:
-            st.markdown(f"### ✍️ 신청 상태 확인")
+            st.markdown("### ✍️ 신청 상태 확인")
             user_id = st.session_state["user_info"]["student_id"]
             user_name = st.session_state["user_info"]["name"]
-            df_app = st.session_state["applications"]
 
-            # 신청 여부 확인
-            is_applied = not df_app[
-                (df_app["student_id"] == user_id)
-                & (df_app["date"] == date_str)
-                & (df_app["status"] == "신청완료")
-            ].empty
+            # 구글 시트 데이터에서 로그인한 학번의 해당 날짜 신청 여부 확인
+            if not df_app.empty:
+                user_record = df_app[
+                    (df_app["student_id"] == user_id)
+                    & (df_app["date"] == date_str)
+                    & (df_app["status"] == "신청완료")
+                ]
+                is_applied = not user_record.empty
+            else:
+                is_applied = False
 
             if is_applied:
                 st.success("✅ **[신청 완료]** 해당 날짜에 석식이 신청되어 있습니다.")
                 if st.button("석식 신청 취소하기"):
-                    # 신청 취소 처리
-                    st.session_state["applications"] = df_app[
+                    # 구글 시트에서 해당 내역 삭제 후 업데이트
+                    updated_df = df_app[
                         ~(
                             (df_app["student_id"] == user_id)
                             & (df_app["date"] == date_str)
                         )
                     ]
-                    st.warning("석식 신청이 취소되었습니다.")
+                    conn.update(data=updated_df)
+                    st.warning("석식 신청이 취소되었으며, 구글 시트에 반영되었습니다.")
                     st.rerun()
             else:
                 st.error("❌ **[미신청]** 해당 날짜에 석식 신청이 되어있지 않습니다.")
                 if st.button("석식 신청하기", type="primary"):
-                    # 신청 등록 처리
-                    new_data = pd.DataFrame(
+                    # 새 신청 내역 생성 후 구글 시트에 추가
+                    new_row = pd.DataFrame(
                         [[user_id, user_name, date_str, "신청완료"]],
                         columns=["student_id", "name", "date", "status"],
                     )
-                    st.session_state["applications"] = pd.concat(
-                        [st.session_state["applications"], new_data],
-                        ignore_index=True,
-                    )
-                    st.success("석식 신청이 완료되었습니다!")
+                    updated_df = pd.concat([df_app, new_row], ignore_index=True)
+                    conn.update(data=updated_df)
+                    st.success("석식 신청이 완료되었으며, 구글 시트에 안전하게 저장되었습니다!")
                     st.rerun()
 
         st.divider()
-        st.markdown("#### 📋 나의 전체 석식 신청 내역")
-        my_apps = df_app[df_app["student_id"] == user_id]
-        if not my_apps.empty:
-            st.dataframe(
-                my_apps[["date", "status"]], use_container_width=True
-            )
-        else:
-            st.write("아직 신청한 내역이 없습니다.")
+        st.markdown("#### 📋 나의 전체 석식 신청 내역 (구글 시트 동기화)")
+        if not df_app.empty:
+            my_apps = df_app[df_app["student_id"] == user_id]
+            if not my_apps.empty:
+                st.dataframe(
+                    my_apps[["date", "status"]], use_container_width=True
+                )
+            else:
+                st.write("아직 신청한 내역이 없습니다.")
 
 # ------------------------------------------
 # TAB 3: [AI] 인원 예측 및 통계
@@ -205,44 +220,43 @@ with tab2:
 with tab3:
     st.subheader("📊 예측 AI 기반 일자별 석식 수요 예측")
     st.write(
-        "과거 요일별 신청 패턴 데이터 기반으로 AI 알고리즘이 예측한 최종 인원수와 현재 실시간 신청 인원을 비교합니다."
+        "구글 시트에 실시간으로 기록되는 데이터를 바탕으로 AI 인원 예측 그래프를 출력합니다."
     )
 
-    # 예시 날짜 목록 및 예측 데이터 생성
-    dates = ["2026-09-22", "2026-09-23", "2026-09-24", "2026-09-25"]
-    predicted_counts = [240, 255, 210, 180]  # AI 모델이 예측한 예상 인원
+    df_app = load_data()
 
-    # 현재 실제 신청 완료 인원 집계
-    df_app = st.session_state["applications"]
+    dates = ["2026-09-22", "2026-09-23", "2026-09-24", "2026-09-25"]
+    predicted_counts = [240, 255, 210, 180]
+
     actual_counts = []
     for d in dates:
-        cnt = len(df_app[(df_app["date"] == d) & (df_app["status"] == "신청완료")])
-        # 시연용 기본 가산 인원
-        actual_counts.append(cnt + 120)
+        if not df_app.empty:
+            cnt = len(
+                df_app[(df_app["date"] == d) & (df_app["status"] == "신청완료")]
+            )
+        else:
+            cnt = 0
+        actual_counts.append(cnt)
 
-    # 데이터프레임 구성
     stats_df = pd.DataFrame(
         {
             "날짜": dates,
-            "현재 실제 신청 인원": actual_counts,
+            "실시간 구글시트 신청 인원": actual_counts,
             "AI 예측 최종 인원": predicted_counts,
         }
     )
 
-    # 지표 카드 표시
     col1, col2, col3 = st.columns(3)
     col1.metric("총 예상 석식 인원 (주간 평균)", f"{int(sum(predicted_counts)/4)}명")
     col2.metric(
         "최대 수요 예측일",
         f"{dates[predicted_counts.index(max(predicted_counts))]} ({max(predicted_counts)}명)",
     )
-    col3.metric("예상 잔반 감소율", "약 23.5% 📉")
+    col3.metric("현재 총 신청 건수", f"{sum(actual_counts)}건")
 
     st.divider()
 
-    # 시각화 그래프
-    st.markdown("#### 📈 날짜별 신청 현황 vs AI 예측 인원")
-
+    st.markdown("#### 📈 날짜별 실시간 신청 현황 vs AI 예측 인원")
     fig, ax = plt.subplots(figsize=(8, 4))
     x = range(len(dates))
     width = 0.35
@@ -251,7 +265,7 @@ with tab3:
         [i - width / 2 for i in x],
         actual_counts,
         width,
-        label="현재 신청 인원",
+        label="실시간 신청 인원",
         color="#4C72B0",
     )
     ax.bar(
@@ -270,7 +284,4 @@ with tab3:
     ax.grid(axis="y", linestyle="--", alpha=0.7)
 
     st.pyplot(fig)
-
-    # 관리자용 데이터표
-    st.markdown("#### 📄 상세 수치 데이터")
     st.dataframe(stats_df, use_container_width=True)
